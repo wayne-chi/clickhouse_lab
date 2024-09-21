@@ -1,0 +1,93 @@
+/*
+When analyzing property prices, location is going to obviously be a common filtering and grouping column. 
+For example, suppose we want to analyze property prices for the town of Liverpool. 
+Run the following query - and notice every row is read because town is not a part of the primary key:
+*/
+
+SELECT 
+    toYear(date) AS year,
+    count(),
+    avg(price),
+    max(price),
+    formatReadableQuantity(sum(price))
+FROM uk_price_paid
+WHERE town = 'LIVERPOOL'
+GROUP BY year
+ORDER BY year DESC;
+
+/*
+You are going to define a projection, 
+but first let's take a look at the amount of disk space being consumed by uk_price_paid. 
+Run the following query - your table should be using about 190M of disk space:
+*/
+SELECT
+    formatReadableSize(sum(bytes_on_disk)),
+    count() AS num_of_parts
+FROM system.parts
+WHERE table = 'uk_price_paid' AND active = 1;
+
+/*
+Define a new projection on uk_price_paid named town_date_projection that satisfies the following requirements:
+a. Contains only the town, date, and price column
+b. The data is sorted by town, then date
+*/
+ALTER TABLE uk_price_paid 
+    ADD PROJECTION town_date_projection (
+    SELECT town, date, price
+    ORDER BY town, date);
+
+/* Materialize the town_date_projection and wait for the mutation to complete.*/
+ALTER TABLE uk_price_paid 
+    MATERIALIZE PROJECTION town_date_projection;
+
+
+-- Now run the query from step 1 again. How many rows were read this time?
+SELECT 
+    toYear(date) AS year,
+    count(),
+    avg(price),
+    max(price),
+    formatReadableQuantity(sum(price))
+FROM uk_price_paid
+WHERE town = 'LIVERPOOL'
+GROUP BY year
+ORDER BY year DESC;
+
+/* 10KB
+Read: 311,302 rows  
+*/
+
+/*
+Define a new projection on uk_price_paid named handy_aggs_projection that satisfies the following requirements:
+a. Selects the average, maximum and sum of the price column
+b. Groups by town column
+*/
+ALTER TABLE uk_price_paid
+    ADD PROJECTION handy_aggs_projection(
+        SELECT avg(price), max(price), sum(price)
+        GROUP BY town 
+    );
+/*
+Materialize the handy_aggs_projection and wait for the mutation to complete.
+*/
+ALTER TABLE uk_price_paid
+    MATERIALIZE PROJECTION handy_aggs_projection;
+
+/*
+Run the following query and notice that only 1,172 rows are scanned:
+*/
+SELECT 
+    avg(price),
+    max(price),
+    formatReadableQuantity(sum(price))
+FROM uk_price_paid
+WHERE town = 'LIVERPOOL';
+
+EXPLAIN indexes= 1
+SELECT 
+    avg(price),
+    max(price),
+    formatReadableQuantity(sum(price))
+FROM uk_price_paid
+WHERE town = 'LIVERPOOL';
+
